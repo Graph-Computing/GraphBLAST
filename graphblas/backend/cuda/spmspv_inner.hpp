@@ -83,7 +83,7 @@ Info spmspvApspieMerge(Index*       w_ind,
   const int tb = static_cast<int>(tb_mode);
   const int nt = static_cast<int>(nt_mode);
 
-  dim3 NT, NB;
+  dim3 NT, NB; // NT: block 内 thread 布局；NB：grid 内 block 布局
   NT.x = nt;
   NT.y = 1;
   NT.z = 1;
@@ -91,8 +91,8 @@ Info spmspvApspieMerge(Index*       w_ind,
   NB.y = 1;
   NB.z = 1;
 
-  // Step 0) Must compute how many elements are in the selected region in the
-  // worst-case. This is a global reduce.
+  // ==================================== Step 0 ====================================
+  // compute how many elements are in the selected region in the worst-case. This is a global reduce.
   //  -> d_temp_nvals |V|
   //  -> d_scan       |V|+1
   int    size        = static_cast<float>(A_nvals)*desc->memusage()+1;
@@ -137,6 +137,7 @@ Info spmspvApspieMerge(Index*       w_ind,
   if (*w_nvals == 0)
     return GrB_SUCCESS;
 
+  // ==================================== Step 1~4 ====================================
   // Step 1) Gather from CSR graph into one big array  |     |  |
   // Step 2) Vector Portion
   //   -IntervalExpand into frontier-length list
@@ -153,6 +154,7 @@ Info spmspvApspieMerge(Index*       w_ind,
   void* d_csrSwapInd;
   void* d_csrSwapVal;
 
+  // 分配内存（只处理结构信息 or 处理结构信息 + 值数据两种情况）
   if (desc->struconly()) {
     d_csrSwapInd = static_cast<char*>(desc->d_buffer_)+   A_nrows      *sizeof(Index);
     d_temp       = static_cast<char*>(desc->d_buffer_)+(  A_nrows+size)*sizeof(Index);
@@ -162,6 +164,7 @@ Info spmspvApspieMerge(Index*       w_ind,
     d_temp       = static_cast<char*>(desc->d_buffer_)+(2*A_nrows+2*size)*sizeof(Index);
   }
 
+  // 数值数组扩展
   if (!desc->struconly_) {
   /*!
    * \brief IntervalExpand, which takes a scan of the output, values and 
@@ -171,7 +174,7 @@ Info spmspvApspieMerge(Index*       w_ind,
    *        values  =  0,  1,  2,  3,  4,  5,  6,  7,  8
    *        counts  =  1,  2,  1,  0,  4,  2,  3,  0,  2
    *        d_scan  =  0,  1,  3,  4,  4,  8, 10, 13, 13 (moveCount = 15).
-   * Expand values[i] by counts[i]:
+   * Expand values[i] by counts[i]:，根据 counts 标识的数量扩展 values
    * d_temp  =  0, 1, 1, 2, 4, 4, 4, 4, 5, 5, 6, 6, 6, 8, 8
    *
    */
@@ -190,16 +193,20 @@ Info spmspvApspieMerge(Index*       w_ind,
    *        interval starts with *all* interval starts, and indices that we 
    *        care about that are used to index into interval starts. This lets
    *        the user in a single function call do 2 IntervalGather's.
+   * @note 使用 CSR 矩阵的行指针数组（A_csrRowPtr）和列索引数组（A_csrColInd）,首先通过行指针找到稀疏矩阵中每一行的非零元素起始位置，然后使用列索引来收集这些元素。
+   * 猜测是根据稀疏向量中参与运算的数据的位置，从 CSR 中取出矩阵中对应列的数据
    */ 
   IntervalGatherIndirect(*w_nvals, A_csrRowPtr,
       reinterpret_cast<Index*>(d_scan), *u_nvals, A_csrColInd, u_ind,
       reinterpret_cast<Index*>(d_csrSwapInd), *(desc->d_context_));
+
+  // 总之就是之前进行数据准备，然后进行 SpMSpV 的单次点和向量的逐位乘法运算  
   if (!desc->struconly()) {
     IntervalGatherIndirect(*w_nvals, A_csrRowPtr,
         reinterpret_cast<Index*>(d_scan), *u_nvals, A_csrVal, u_ind,
         reinterpret_cast<T*>(d_csrSwapVal), *(desc->d_context_));
 
-  // Step 4) Element-wise multiplication
+  // Step 4) Element-wise multiplication, 逐元素乘法
     NB.x = (*w_nvals+nt-1)/nt;
     eWiseMultKernel<<<NB, NT>>>(reinterpret_cast<T*>(d_csrSwapVal),
         extractAdd(op), op.identity(), extractMul(op),
@@ -213,7 +220,8 @@ Info spmspvApspieMerge(Index*       w_ind,
       printDevice("SwapVal", reinterpret_cast<T*>(d_csrSwapVal), *w_nvals);
   }
 
-  // Step 5) Sort step
+  // ==================================== Step 5 ====================================
+  // Sort step，没太想好进行这一步的目的是什么，或许和负载均衡的实现有关
   //   -> d_csrTempInd |E| x desc->memusage()
   //   -> d_csrTempVal |E| x desc->memusage()
   size_t temp_storage_bytes = 0;
@@ -287,7 +295,8 @@ Info spmspvApspieMerge(Index*       w_ind,
       *w_nvals);
   }
 
-  // Step 6) Segmented Reduce By Key
+  // ==================================== Step 6 ====================================
+  // Segmented Reduce By Key
   if (desc->struconly()) {
     if (!desc->sort()) {
       NB.x = (*w_nvals+nt-1)/nt;

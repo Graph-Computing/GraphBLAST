@@ -96,6 +96,7 @@ Info vxm(Vector<W>*       w,
   // Get storage
   Storage u_vec_type;
   Storage A_mat_type;
+  // 获取矩阵和向量的稀疏度信息
   CHECK(u->getStorage(&u_vec_type));
   CHECK(A->getStorage(&A_mat_type));
 
@@ -153,7 +154,9 @@ Info vxm(Vector<W>*       w,
   //
   // Note: differs from mxv, because mxv would say instead:
   // 3) "... if CSC representation not available ..."
+  // 稀疏矩阵 x 稀疏向量
   if (A_mat_type == GrB_SPARSE && u_vec_type == GrB_SPARSE) {
+    // simple 和 twc 负载均衡算法尚未实现
     if (lb_mode == GrB_LOAD_BALANCE_SIMPLE ||
         lb_mode == GrB_LOAD_BALANCE_TWC) {
       CHECK(w->setStorage(GrB_DENSE));
@@ -176,6 +179,7 @@ Info vxm(Vector<W>*       w,
         std::cout << "w_vec_type: " << u_vec_type << std::endl;
       }
     // 1c) Merge-path (two-phase decomposition) codepath
+    // merge-path 负载均衡算法
     } else if (lb_mode == GrB_LOAD_BALANCE_MERGE) {
       CHECK(w->setStorage(GrB_SPARSE));
       CHECK(spmspvMerge(&w->sparse_, mask, accum, op, &A->sparse_,
@@ -184,14 +188,17 @@ Info vxm(Vector<W>*       w,
       std::cout << "Error: Invalid load-balance algorithm!\n";
     }
     desc->lastmxv_ = GrB_PUSHONLY;
+  // 稠密矩阵 or 稠密向量
   } else {
     // TODO(@ctcyang): Some performance left on table, sparse2dense should
     // only convert rather than setStorage if accum is being used
     CHECK(w->setStorage(GrB_DENSE));
     // CHECK(w->sparse2dense(op.identity(), desc));
+    // 稀疏矩阵 x 稠密向量
     if (A_mat_type == GrB_SPARSE)
       CHECK(spmv(&w->dense_, mask, accum, op, &A->sparse_, &u->dense_,
           desc));
+    // 稠密矩阵 x 稠密向量
     else
       CHECK(gemv(&w->dense_, mask, accum, op, &A->dense_, &u->dense_,
           desc));
@@ -275,6 +282,7 @@ Info mxv(Vector<W>*       w,
   // 3) SpMV:   SpMat x DeVec (fallback if CSC representation not available)
   // 4) GeMV:   DeMat x DeVec
   if (A_mat_type == GrB_SPARSE && u_vec_type == GrB_SPARSE) {
+    // simple 和 twc 两种负载均衡算法尚未实现
     if (lb_mode == GrB_LOAD_BALANCE_SIMPLE ||
         lb_mode == GrB_LOAD_BALANCE_TWC) {
       CHECK(w->setStorage(GrB_DENSE));
@@ -299,6 +307,7 @@ Info mxv(Vector<W>*       w,
         std::cout << "w_vec_type: " << u_vec_type << std::endl;
       }
     // 1c) Merge-path (two-phase decomposition) codepath
+    // merge-path 负载均衡算法
     } else if (lb_mode == GrB_LOAD_BALANCE_MERGE) {
       CHECK(w->setStorage(GrB_SPARSE));
       CHECK(spmspvMerge(&w->sparse_, mask, accum, op, &A->sparse_,
@@ -309,10 +318,12 @@ Info mxv(Vector<W>*       w,
     desc->lastmxv_ = GrB_PUSHONLY;
   } else {
     CHECK(w->sparse2dense(op.identity(), desc));
+    // 稀疏矩阵 x 稠密向量
     if (A_mat_type == GrB_SPARSE) {
       CHECK(spmv(&w->dense_, mask, accum, op, &A->sparse_,
           &u->dense_, desc));
     } else {
+      // 稠密矩阵 x 稠密向量
       CHECK(gemv(&w->dense_, mask, accum, op, &A->dense_,
           &u->dense_, desc));
     }

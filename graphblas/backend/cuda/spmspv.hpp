@@ -248,6 +248,8 @@ Info spmspvMerge(SparseVector<W>*       w,
       }
     }
   } else {
+    // u->d_ind_: 稀疏向量中非零元的索引
+    // u->d_val_: 稀疏向量中非零元的数值
     spmspvApspieMerge(w->d_ind_, w->d_val_, &w->nvals_, NULL, op, A_nrows,
         A->nvals_, A_csrRowPtr, A_csrColInd, A_csrVal, u->d_ind_, u->d_val_,
         &u->nvals_, desc);
